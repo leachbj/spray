@@ -150,7 +150,7 @@ private[parsing] final class HttpHeaderParser private (val settings: ParserSetti
   }
 
   private def parseRawHeader(input: ByteString, lineStart: Int, cursor: Int, nodeIx: Int): Int = {
-    val colonIx = scanHeaderNameAndReturnIndexOfColon(input, lineStart, lineStart + maxHeaderNameLength)(cursor)
+    val colonIx = scanHeaderNameAndReturnIndexOfColon(input, lineStart, lineStart + 1 + maxHeaderNameLength)(cursor)
     val headerName = asciiString(input, lineStart, colonIx)
     try {
       val valueParser = rawHeaderValueParser(headerName, maxHeaderValueLength, settings.headerValueCacheLimit(headerName))
@@ -158,7 +158,7 @@ private[parsing] final class HttpHeaderParser private (val settings: ParserSetti
       parseHeaderLine(input, lineStart)(cursor, nodeIx)
     } catch {
       case OutOfTrieSpaceException ⇒ // if we cannot insert we drop back to simply creating new header instances
-        val (headerValue, endIx) = scanHeaderValue(input, colonIx + 1, colonIx + 1 + maxHeaderValueLength)()
+        val (headerValue, endIx) = scanHeaderValue(input, colonIx + 1, colonIx + maxHeaderValueLength + 3)()
         resultHeader = RawHeader(headerName, headerValue.trim)
         endIx
     }
@@ -443,7 +443,7 @@ private object HttpHeaderParser {
                                 maxValueCount: Int) =
     new HeaderValueParser(headerName, maxValueCount) {
       def apply(input: ByteString, valueStart: Int, warnOnIllegalHeader: ErrorInfo ⇒ Unit): (HttpHeader, Int) = {
-        val (headerValue, endIx) = scanHeaderValue(input, valueStart, valueStart + maxHeaderValueLength)()
+        val (headerValue, endIx) = scanHeaderValue(input, valueStart, valueStart + maxHeaderValueLength + 2)()
         val trimmedHeaderValue = headerValue.trim
         val header = HttpParser.parse(parserRule, trimmedHeaderValue) match {
           case Right(h) ⇒ h
@@ -458,33 +458,32 @@ private object HttpHeaderParser {
   def rawHeaderValueParser(headerName: String, maxHeaderValueLength: Int, maxValueCount: Int) =
     new HeaderValueParser(headerName, maxValueCount) {
       def apply(input: ByteString, valueStart: Int, warnOnIllegalHeader: ErrorInfo ⇒ Unit): (HttpHeader, Int) = {
-        val (headerValue, endIx) = scanHeaderValue(input, valueStart, valueStart + maxHeaderValueLength)()
+        val (headerValue, endIx) = scanHeaderValue(input, valueStart, valueStart + maxHeaderValueLength + 2)()
         RawHeader(headerName, headerValue.trim) -> endIx
       }
     }
 
-  @tailrec private def scanHeaderNameAndReturnIndexOfColon(input: ByteString, start: Int,
-                                                           maxHeaderNameEndIx: Int)(ix: Int = start): Int =
-    if (ix < maxHeaderNameEndIx)
+  @tailrec private def scanHeaderNameAndReturnIndexOfColon(input: ByteString, start: Int, limit: Int)(ix: Int = start): Int =
+    if (ix < limit)
       byteChar(input, ix) match {
         case ':'                 ⇒ ix
-        case c if isTokenChar(c) ⇒ scanHeaderNameAndReturnIndexOfColon(input, start, maxHeaderNameEndIx)(ix + 1)
+        case c if isTokenChar(c) ⇒ scanHeaderNameAndReturnIndexOfColon(input, start, limit)(ix + 1)
         case c                   ⇒ fail(s"Illegal character '${escape(c)}' in header name")
       }
-    else fail(s"HTTP header name exceeds the configured limit of ${maxHeaderNameEndIx - start} characters")
+    else fail(s"HTTP header name exceeds the configured limit of ${limit - start - 1} characters")
 
-  @tailrec private def scanHeaderValue(input: ByteString, start: Int, maxHeaderValueEndIx: Int)(sb: JStringBuilder = null, ix: Int = start): (String, Int) = {
+  @tailrec private def scanHeaderValue(input: ByteString, start: Int, limit: Int)(sb: JStringBuilder = null, ix: Int = start): (String, Int) = {
     def spaceAppended = (if (sb != null) sb else new JStringBuilder(asciiString(input, start, ix))).append(' ')
-    if (ix < maxHeaderValueEndIx)
+    if (ix < limit)
       byteChar(input, ix) match {
-        case '\t' ⇒ scanHeaderValue(input, start, maxHeaderValueEndIx)(spaceAppended, ix + 1)
+        case '\t' ⇒ scanHeaderValue(input, start, limit)(spaceAppended, ix + 1)
         case '\r' if byteChar(input, ix + 1) == '\n' ⇒
-          if (isWhitespace(byteChar(input, ix + 2))) scanHeaderValue(input, start, maxHeaderValueEndIx)(spaceAppended, ix + 3)
+          if (isWhitespace(byteChar(input, ix + 2))) scanHeaderValue(input, start, limit)(spaceAppended, ix + 3)
           else (if (sb != null) sb.toString else asciiString(input, start, ix), ix + 2)
-        case c if c >= ' ' ⇒ scanHeaderValue(input, start, maxHeaderValueEndIx)(if (sb != null) sb.append(c) else sb, ix + 1)
+        case c if c >= ' ' ⇒ scanHeaderValue(input, start, limit)(if (sb != null) sb.append(c) else sb, ix + 1)
         case c             ⇒ fail(s"Illegal character '${escape(c)}' in header value")
       }
-    else fail(s"HTTP header value exceeds the configured limit of ${maxHeaderValueEndIx - start} characters")
+    else fail(s"HTTP header value exceeds the configured limit of ${limit - start - 2} characters")
   }
 
   def fail(summary: String) = throw new ParsingException(StatusCodes.BadRequest, ErrorInfo(summary))

@@ -32,8 +32,8 @@ class HttpHeaderParserSpec extends Specification {
   val testConf: Config = ConfigFactory.parseString("""
     akka.event-handlers = ["akka.testkit.TestEventListener"]
     akka.loglevel = WARNING
-    spray.can.parsing.max-header-name-length = 20
-    spray.can.parsing.max-header-value-length = 21
+    spray.can.parsing.max-header-name-length = 60
+    spray.can.parsing.max-header-value-length = 1000
     spray.can.parsing.header-cache.Host = 300""")
   val system = ActorSystem(actorSystemNameFrom(getClass), testConf)
 
@@ -227,13 +227,15 @@ class HttpHeaderParserSpec extends Specification {
     }
 
     "produce an error message for lines with a too-long header name" in new TestSetup() {
-      parseLine("123456789012345678901: foo\r\nx") must
-        throwA[ParsingException]("HTTP header name exceeds the configured limit of 20 characters")
+      noException should be thrownBy parseLine("123456789012345678901234567890123456789012345678901234567890: foo\r\nx")
+      the[ParsingException] thrownBy parseLine("1234567890123456789012345678901234567890123456789012345678901: foo\r\nx") should have message
+        "HTTP header name exceeds the configured limit of 60 characters"
     }
 
     "produce an error message for lines with a too-long header value" in new TestSetup() {
-      parseLine("foo: 1234567890123456789012\r\nx") must
-        throwA[ParsingException]("HTTP header value exceeds the configured limit of 21 characters")
+      noException should be thrownBy parseLine(s"foo: ${nextRandomString(nextRandomAlphaNumChar, 1000)}\r\nx")
+      the[ParsingException] thrownBy parseLine(s"foo: ${nextRandomString(nextRandomAlphaNumChar, 1001)}\r\nx") should have message
+        "HTTP header value exceeds the configured limit of 1000 characters"
     }
 
     "continue parsing raw headers even if the overall cache capacity is reached" in new TestSetup() {
